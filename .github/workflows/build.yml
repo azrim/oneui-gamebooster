@@ -19,7 +19,16 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build module
-        run: VERSION="${{ github.event.inputs.version }}" ./build.sh
+        id: build
+        run: |
+          V="${{ github.event.inputs.version }}"
+          if [ -z "$V" ] && [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            V="${GITHUB_REF#refs/tags/}"; V="${V#v}"
+          fi
+          VERSION="$V" ./build.sh
+          ZIP="$(ls dist/*.zip | head -1)"
+          echo "zip=$(basename "$ZIP")" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$ZIP" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -33,3 +42,21 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.zip
+          body: |
+            Samsung **Game Booster** (`com.samsung.android.game.gametools`), **GOS**
+            (`com.samsung.android.game.gos`) and **Game Launcher**
+            (`com.samsung.android.game.gamehome`), restored as system apps on debloated One UI ROMs.
+
+            **Install:** KernelSU → Modules → Install from storage → reboot.
+            **Requires** a KernelSU metamodule (e.g. Hybrid-Mount) to mount `system/`.
+
+            `customize.sh` picks the builds that match the ROM:
+
+            | ROM Android | Game Booster | GOS |
+            |---|---|---|
+            | API ≥ 35 (Android 15/16, One UI 7/8) | 8.x | 4.4.00.8 |
+            | API 33–34 (Android 13/14, One UI 5/6) | 5.x | 4.4.00.8 |
+            | API 29–32 (Android 10–12) | 5.x | 4.0.06 |
+
+            **Asset:** `${{ steps.build.outputs.zip }}`
+            **SHA-256:** `${{ steps.build.outputs.sha256 }}`
