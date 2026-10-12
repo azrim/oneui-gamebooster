@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Samsung Game Booster - KernelSU/Magisk module builder.
 #
-# Fetches the Samsung gaming apps from the Galaxy Store (plus GOS from APKPure),
+# Fetches the Samsung gaming apps (Galaxy Store, plus GOS from APKMirror),
 # generates the additive permission allowlists and packs the module zip.
 #
-# Env overrides: VERSION, VERSIONCODE, WORK, DIST, GS_DEVICES, GOS_URL
+# Env overrides: VERSION, VERSIONCODE, WORK, DIST, GS_DEVICES,
+#                GOS_MODERN_URL, GOS_LEGACY_URL, GOS_FALLBACK_URL
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,9 +22,16 @@ VERSIONCODE="${VERSIONCODE:-$(date +%y%m%d)}"
 GT_MODERN_SDK=36; GT_MODERN_UI=80000   # gametools 8.x, API 35+
 GT_LEGACY_SDK=33; GT_LEGACY_UI=50000   # gametools 5.x, API 30-34
 GAMEHOME_SDK=36;  GAMEHOME_UI=80000
-GOS_URL="${GOS_URL:-https://d.apkpure.com/b/APK/com.samsung.android.game.gos?version=latest}"
+
+# GOS is a system component and is NOT on the Galaxy Store. APKMirror is the source
+# (authoritative, Samsung-signed). Two builds are kept so one module covers every ROM.
+GOS_AM="https://www.apkmirror.com/apk/samsung-electronics-co-ltd/game-optimizing-service"
+GOS_MODERN_URL="${GOS_MODERN_URL:-$GOS_AM/samsung-game-optimizing-service-4-4-00-8-release/samsung-game-optimizing-service-4-4-00-8-android-apk-download/}"  # arm64, API 33+
+GOS_LEGACY_URL="${GOS_LEGACY_URL:-$GOS_AM/samsung-game-optimizing-service-4-0-06-release/samsung-game-optimizing-service-4-0-06-android-apk-download/}"  # noarch, API 29+
+GOS_FALLBACK_URL="${GOS_FALLBACK_URL:-https://d.apkpure.com/b/APK/com.samsung.android.game.gos?version=latest}"
 
 log() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31m!!\033[0m %s\n' "$*" >&2; exit 1; }
 
 for c in curl python3 zip; do command -v "$c" >/dev/null || die "$c not found"; done
@@ -43,24 +51,26 @@ log "Fetching Game Launcher"
 fetch_apk com.samsung.android.game.gamehome "$GAMEHOME_SDK" "$GAMEHOME_UI" "$WORK/apks/gamehome.apk" \
     || die "could not fetch gamehome"
 
-# GOS is not distributed on the Galaxy Store, so it comes from a mirror. Some mirrors
-# (e.g. APKPure) block datacenter IPs, so this step is best-effort: the module still
-# builds and works without GOS, it just loses the background optimisation service.
-log "Fetching GOS"
-GOS_APK=""
-for url in "$GOS_URL" \
-           "https://d.apkpure.com/b/APK/com.samsung.android.game.gos?version=latest" \
-           "https://d.apkpure.com/b/XAPK/com.samsung.android.game.gos?version=latest"; do
+log "Fetching GOS (modern, API 33+) from APKMirror"
+GOS_MODERN=""
+if "$REPO_DIR/scripts/apkmirror.sh" "$GOS_MODERN_URL" "$WORK/apks/gos-modern.apk"; then
+    GOS_MODERN="$WORK/apks/gos-modern.apk"
+fi
+
+log "Fetching GOS (legacy, API 29-32) from APKMirror"
+GOS_LEGACY=""
+if "$REPO_DIR/scripts/apkmirror.sh" "$GOS_LEGACY_URL" "$WORK/apks/gos-legacy.apk"; then
+    GOS_LEGACY="$WORK/apks/gos-legacy.apk"
+fi
+
+if [ -z "$GOS_MODERN" ] && [ -z "$GOS_LEGACY" ]; then
+    warn "APKMirror failed; trying mirror fallback"
     if curl -fL --retry 2 --max-time 600 -A "Mozilla/5.0 (Linux; Android 14)" \
-            -o "$WORK/apks/gos.apk" "$url"; then
-        GOS_APK="$WORK/apks/gos.apk"
-        break
+            -o "$WORK/apks/gos-legacy.apk" "$GOS_FALLBACK_URL"; then
+        GOS_LEGACY="$WORK/apks/gos-legacy.apk"
+    else
+        warn "GOS unavailable from every source - building without it"
     fi
-done
-if [ -n "$GOS_APK" ]; then
-    log "  GOS $(python3 "$REPO_DIR/scripts/axml.py" "$GOS_APK" 2>/dev/null | sed -n 's/.*versionName=\([^ ]*\).*/\1/p' | head -1)"
-else
-    printf '\033[1;33m!!\033[0m GOS could not be fetched (mirror blocked?) - building without it\n'
 fi
 
 log "Assembling module"
@@ -75,15 +85,25 @@ mkdir -p "$MOD/apks" \
 cp "$WORK/apks/gametools-modern.apk" "$MOD/system/priv-app/GameTools_Dream/GameTools_Dream.apk"
 cp "$WORK/apks/gametools-legacy.apk" "$MOD/apks/gametools-legacy.apk"
 cp "$WORK/apks/gamehome.apk"         "$MOD/system/app/GameHome/GameHome.apk"
-if [ -n "$GOS_APK" ]; then
-    cp "$GOS_APK" "$MOD/system/priv-app/GameOptimizationService/GameOptimizationService.apk"
+
+# GOS: modern is the default in system/, legacy goes to apks/ for customize.sh to swap in.
+GOS_SYS=""
+if [ -n "$GOS_MODERN" ]; then
+    GOS_SYS="$GOS_MODERN"
+elif [ -n "$GOS_LEGACY" ]; then
+    GOS_SYS="$GOS_LEGACY"
+fi
+if [ -n "$GOS_SYS" ]; then
+    cp "$GOS_SYS" "$MOD/system/priv-app/GameOptimizationService/GameOptimizationService.apk"
+fi
+if [ -n "$GOS_LEGACY" ]; then
+    cp "$GOS_LEGACY" "$MOD/apks/gos-legacy.apk"
 fi
 
 log "Generating permission allowlists"
 PRIVAPP_APKS=("$WORK/apks/gametools-modern.apk" "$WORK/apks/gametools-legacy.apk")
-if [ -n "$GOS_APK" ]; then
-    PRIVAPP_APKS+=("$GOS_APK")
-fi
+if [ -n "$GOS_MODERN" ]; then PRIVAPP_APKS+=("$GOS_MODERN"); fi
+if [ -n "$GOS_LEGACY" ]; then PRIVAPP_APKS+=("$GOS_LEGACY"); fi
 python3 "$REPO_DIR/scripts/gen_perms.py" \
     --priv-list "$REPO_DIR/data/privileged-permissions.txt" \
     --out "$MOD/system/etc/permissions" \

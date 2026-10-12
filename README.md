@@ -16,19 +16,20 @@ the platform key). This module puts them back the systemless way.
 | Game Optimization Service | `com.samsung.android.game.gos` | `/system/priv-app/GameOptimizationService/` |
 | Game Launcher | `com.samsung.android.game.gamehome` | `/system/app/GameHome/` |
 
-The APKs are fetched from the **Galaxy Store** (same method UN1CA uses) at build time, so they are
-the current Samsung-signed builds — no proprietary binaries are stored in this repository.
+The APKs are fetched from the **Galaxy Store** (same method UN1CA uses) and from **APKMirror**
+for GOS, at build time — no proprietary binaries are stored in this repository.
 
 ### One build, any ROM
 
-`customize.sh` reads `ro.build.version.sdk` and picks the Game Booster build that matches the ROM:
+`customize.sh` reads `ro.build.version.sdk` and picks the build that matches the ROM:
 
-| ROM Android | gametools |
-|---|---|
-| API ≥ 35 (Android 15/16, One UI 7/8) | 8.x |
-| API 30–34 (Android 11–14, One UI 3–6) | 5.x |
+| ROM Android | gametools | GOS |
+|---|---|---|
+| API ≥ 35 (Android 15/16, One UI 7/8) | 8.x | 4.4.00.8 |
+| API 33–34 (Android 13/14, One UI 5/6) | 5.x | 4.4.00.8 |
+| API 29–32 (Android 10–12) | 5.x | 4.0.06 |
 
-GOS and Game Launcher are shared (their `minSdk` covers everything).
+Game Launcher is shared (its `minSdk` covers everything).
 
 ## Requirements
 
@@ -58,14 +59,15 @@ VERSION=2.1 ./build.sh
 Requires `bash`, `curl`, `python3`, `zip`. The script:
 
 1. Resolves Galaxy Store download URIs (`scripts/galaxy_store.sh`, a port of UN1CA's
-   `GET_GALAXY_STORE_DOWNLOAD_URL`) and downloads the APKs.
+   `GET_GALAXY_STORE_DOWNLOAD_URL`) for gametools and gamehome, and pulls GOS from
+   APKMirror (`scripts/apkmirror.sh`).
 2. Generates the permission allowlists (`scripts/gen_perms.py`) from the downloaded APKs.
 3. Assembles `module/` + the APKs and zips the result into `dist/`.
 
-> **GOS** is not distributed on the Galaxy Store, so it is fetched from a mirror
-> (APKPure by default, overridable with `GOS_URL`). Some mirrors block datacenter IPs
-> (including GitHub Actions runners), so this step is **best-effort**: if it fails the
-> module is still built, just without GOS. Game Booster and Game Launcher are unaffected.
+> **GOS** is a system component and is **not on the Galaxy Store**, so it is fetched from
+> **APKMirror** (`scripts/apkmirror.sh`, overridable with `GOS_MODERN_URL` / `GOS_LEGACY_URL`).
+> Two builds are kept — 4.4.00.8 (arm64, API 33+) and 4.0.06 (noarch, API 29–32) — and
+> `customize.sh` picks the right one. A plain mirror is only used as a last-resort fallback.
 
 ### Permissions
 
@@ -83,6 +85,7 @@ scripts/dump_privileged_perms.sh <adb-serial>
 ## Credits
 
 - [UN1CA](https://github.com/salvogiangri/UN1CA) by salvogiangri — the Galaxy Store download method.
+- [APKMirror](https://www.apkmirror.com/) — the GOS builds.
 - [Hybrid-Mount](https://github.com/Hybrid-Mount/meta-hybrid_mount) — the KernelSU metamodule used for testing.
 - Samsung for the apps themselves (not affiliated).
 
