@@ -43,9 +43,25 @@ log "Fetching Game Launcher"
 fetch_apk com.samsung.android.game.gamehome "$GAMEHOME_SDK" "$GAMEHOME_UI" "$WORK/apks/gamehome.apk" \
     || die "could not fetch gamehome"
 
+# GOS is not distributed on the Galaxy Store, so it comes from a mirror. Some mirrors
+# (e.g. APKPure) block datacenter IPs, so this step is best-effort: the module still
+# builds and works without GOS, it just loses the background optimisation service.
 log "Fetching GOS"
-curl -fL --retry 3 --max-time 600 -A "Mozilla/5.0 (Linux; Android 14)" \
-    -o "$WORK/apks/gos.apk" "$GOS_URL" || die "could not fetch gos"
+GOS_APK=""
+for url in "$GOS_URL" \
+           "https://d.apkpure.com/b/APK/com.samsung.android.game.gos?version=latest" \
+           "https://d.apkpure.com/b/XAPK/com.samsung.android.game.gos?version=latest"; do
+    if curl -fL --retry 2 --max-time 600 -A "Mozilla/5.0 (Linux; Android 14)" \
+            -o "$WORK/apks/gos.apk" "$url"; then
+        GOS_APK="$WORK/apks/gos.apk"
+        break
+    fi
+done
+if [ -n "$GOS_APK" ]; then
+    log "  GOS $(python3 "$REPO_DIR/scripts/axml.py" "$GOS_APK" 2>/dev/null | sed -n 's/.*versionName=\([^ ]*\).*/\1/p' | head -1)"
+else
+    printf '\033[1;33m!!\033[0m GOS could not be fetched (mirror blocked?) - building without it\n'
+fi
 
 log "Assembling module"
 MOD="$WORK/$MOD_ID"
@@ -58,14 +74,20 @@ mkdir -p "$MOD/apks" \
 
 cp "$WORK/apks/gametools-modern.apk" "$MOD/system/priv-app/GameTools_Dream/GameTools_Dream.apk"
 cp "$WORK/apks/gametools-legacy.apk" "$MOD/apks/gametools-legacy.apk"
-cp "$WORK/apks/gos.apk"              "$MOD/system/priv-app/GameOptimizationService/GameOptimizationService.apk"
 cp "$WORK/apks/gamehome.apk"         "$MOD/system/app/GameHome/GameHome.apk"
+if [ -n "$GOS_APK" ]; then
+    cp "$GOS_APK" "$MOD/system/priv-app/GameOptimizationService/GameOptimizationService.apk"
+fi
 
 log "Generating permission allowlists"
+PRIVAPP_APKS=("$WORK/apks/gametools-modern.apk" "$WORK/apks/gametools-legacy.apk")
+if [ -n "$GOS_APK" ]; then
+    PRIVAPP_APKS+=("$GOS_APK")
+fi
 python3 "$REPO_DIR/scripts/gen_perms.py" \
     --priv-list "$REPO_DIR/data/privileged-permissions.txt" \
     --out "$MOD/system/etc/permissions" \
-    --privapp "$WORK/apks/gametools-modern.apk" "$WORK/apks/gametools-legacy.apk" "$WORK/apks/gos.apk" \
+    --privapp "${PRIVAPP_APKS[@]}" \
     --signature "$WORK/apks/gamehome.apk"
 
 sed -i "s|^version=.*|version=v${VERSION}|" "$MOD/module.prop"

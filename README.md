@@ -62,6 +62,11 @@ Requires `bash`, `curl`, `python3`, `zip`. The script:
 2. Generates the permission allowlists (`scripts/gen_perms.py`) from the downloaded APKs.
 3. Assembles `module/` + the APKs and zips the result into `dist/`.
 
+> **GOS** is not distributed on the Galaxy Store, so it is fetched from a mirror
+> (APKPure by default, overridable with `GOS_URL`). Some mirrors block datacenter IPs
+> (including GitHub Actions runners), so this step is **best-effort**: if it fails the
+> module is still built, just without GOS. Game Booster and Game Launcher are unaffected.
+
 ### Permissions
 
 The module ships **additive** allowlist files (`privapp-permissions-samsung-gamebooster.xml`,
