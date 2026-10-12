@@ -1,0 +1,6 @@
+id=samsung_gamebooster
+name=Samsung Game Booster (GameTools + GOS + Game Launcher)
+version=vDEV
+versionCode=1
+author=azrim
+description=Restore the Samsung gaming stack (Game Booster/gametools, Game Optimization Service, Game Launcher) as system apps on debloated One UI ROMs. One build for all ROMs: customize.sh auto-picks the Game Booster APK matching the ROM's Android version. Permission allowlists are added additively so any ROM-provided allowlist is preserved. Requires a KernelSU metamodule. Reboot after install.
