@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Samsung Game Booster - KernelSU/Magisk module builder.
 #
-# Fetches the Samsung gaming apps (Galaxy Store, plus GOS from APKMirror),
-# generates the additive permission allowlists and packs the module zip.
+# Fetches the Samsung gaming apps (gametools/gamehome from the Galaxy Store, GOS from
+# this repo's "gos-vendor" release), generates the additive permission allowlists and
+# packs the module zip.
 #
-# Env overrides: VERSION, VERSIONCODE, WORK, DIST, GS_DEVICES,
-#                GOS_MODERN_URL, GOS_LEGACY_URL, GOS_FALLBACK_URL
+# Env overrides: VERSION, VERSIONCODE, WORK, DIST, GS_DEVICES, REPO_SLUG,
+#                GOS_VENDOR_BASE, GOS_MODERN_URL, GOS_LEGACY_URL, GOS_FALLBACK_URL
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,8 +24,13 @@ GT_MODERN_SDK=36; GT_MODERN_UI=80000   # gametools 8.x, API 35+
 GT_LEGACY_SDK=33; GT_LEGACY_UI=50000   # gametools 5.x, API 30-34
 GAMEHOME_SDK=36;  GAMEHOME_UI=80000
 
-# GOS is a system component and is NOT on the Galaxy Store. APKMirror is the source
-# (authoritative, Samsung-signed). Two builds are kept so one module covers every ROM.
+# GOS is a system component and is NOT on the Galaxy Store. APK mirrors sit behind
+# Cloudflare and 403 datacenter IPs (incl. GitHub runners), so the two GOS builds are
+# vendored as assets of the "gos-vendor" release in this repo. Mirrors are fallbacks.
+SLUG="${REPO_SLUG:-$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null \
+        | sed -E 's#(git@|https://)github\.com[:/]##; s#\.git$##')}"
+[ -n "$SLUG" ] || SLUG="azrim/oneui-gamebooster"
+GOS_VENDOR_BASE="${GOS_VENDOR_BASE:-https://github.com/$SLUG/releases/download/gos-vendor}"
 GOS_AM="https://www.apkmirror.com/apk/samsung-electronics-co-ltd/game-optimizing-service"
 GOS_MODERN_URL="${GOS_MODERN_URL:-$GOS_AM/samsung-game-optimizing-service-4-4-00-8-release/samsung-game-optimizing-service-4-4-00-8-android-apk-download/}"  # arm64, API 33+
 GOS_LEGACY_URL="${GOS_LEGACY_URL:-$GOS_AM/samsung-game-optimizing-service-4-0-06-release/samsung-game-optimizing-service-4-0-06-android-apk-download/}"  # noarch, API 29+
@@ -34,6 +40,27 @@ log() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31m!!\033[0m %s\n' "$*" >&2; exit 1; }
 
+apk_package() { python3 "$REPO_DIR/scripts/axml.py" "$1" 2>/dev/null | sed -n 's/^ *package=\([^ ]*\).*/\1/p' | head -1; }
+verify_apk() { [ "$(apk_package "$1")" = "$2" ] || die "$(basename "$1") is not $2"; }
+_gos_ok() { [ "$(apk_package "$1")" = "com.samsung.android.game.gos" ]; }
+
+# fetch_gos <modern|legacy> <outfile> - vendored release -> APKMirror -> mirror
+fetch_gos() {
+    local kind="$1" out="$2" url
+    if curl -fsSL --retry 2 --max-time 600 -o "$out" "$GOS_VENDOR_BASE/gos-$kind.apk" && _gos_ok "$out"; then
+        echo "  source: vendored release"; return 0
+    fi
+    if [ "$kind" = modern ]; then url="$GOS_MODERN_URL"; else url="$GOS_LEGACY_URL"; fi
+    if "$REPO_DIR/scripts/apkmirror.sh" "$url" "$out" && _gos_ok "$out"; then
+        echo "  source: APKMirror"; return 0
+    fi
+    if [ "$kind" = legacy ] && curl -fsSL --retry 2 --max-time 600 \
+            -A "Mozilla/5.0 (Linux; Android 14)" -o "$out" "$GOS_FALLBACK_URL" && _gos_ok "$out"; then
+        echo "  source: mirror"; return 0
+    fi
+    return 1
+}
+
 for c in curl python3 zip; do command -v "$c" >/dev/null || die "$c not found"; done
 
 rm -rf "$WORK"
@@ -42,35 +69,28 @@ mkdir -p "$WORK/apks" "$DIST"
 log "Fetching Game Booster (modern, API 35+)  [$(gs_version_name com.samsung.android.game.gametools $GT_MODERN_SDK $GT_MODERN_UI 2>/dev/null || echo '?')]"
 fetch_apk com.samsung.android.game.gametools "$GT_MODERN_SDK" "$GT_MODERN_UI" "$WORK/apks/gametools-modern.apk" \
     || die "could not fetch modern gametools"
+verify_apk "$WORK/apks/gametools-modern.apk" com.samsung.android.game.gametools
 
 log "Fetching Game Booster (legacy, API 30-34) [$(gs_version_name com.samsung.android.game.gametools $GT_LEGACY_SDK $GT_LEGACY_UI 2>/dev/null || echo '?')]"
 fetch_apk com.samsung.android.game.gametools "$GT_LEGACY_SDK" "$GT_LEGACY_UI" "$WORK/apks/gametools-legacy.apk" \
     || die "could not fetch legacy gametools"
+verify_apk "$WORK/apks/gametools-legacy.apk" com.samsung.android.game.gametools
 
 log "Fetching Game Launcher"
 fetch_apk com.samsung.android.game.gamehome "$GAMEHOME_SDK" "$GAMEHOME_UI" "$WORK/apks/gamehome.apk" \
     || die "could not fetch gamehome"
+verify_apk "$WORK/apks/gamehome.apk" com.samsung.android.game.gamehome
 
-log "Fetching GOS (modern, API 33+) from APKMirror"
+log "Fetching GOS (modern, API 33+)"
 GOS_MODERN=""
-if "$REPO_DIR/scripts/apkmirror.sh" "$GOS_MODERN_URL" "$WORK/apks/gos-modern.apk"; then
-    GOS_MODERN="$WORK/apks/gos-modern.apk"
-fi
+if fetch_gos modern "$WORK/apks/gos-modern.apk"; then GOS_MODERN="$WORK/apks/gos-modern.apk"; fi
 
-log "Fetching GOS (legacy, API 29-32) from APKMirror"
+log "Fetching GOS (legacy, API 29-32)"
 GOS_LEGACY=""
-if "$REPO_DIR/scripts/apkmirror.sh" "$GOS_LEGACY_URL" "$WORK/apks/gos-legacy.apk"; then
-    GOS_LEGACY="$WORK/apks/gos-legacy.apk"
-fi
+if fetch_gos legacy "$WORK/apks/gos-legacy.apk"; then GOS_LEGACY="$WORK/apks/gos-legacy.apk"; fi
 
 if [ -z "$GOS_MODERN" ] && [ -z "$GOS_LEGACY" ]; then
-    warn "APKMirror failed; trying mirror fallback"
-    if curl -fL --retry 2 --max-time 600 -A "Mozilla/5.0 (Linux; Android 14)" \
-            -o "$WORK/apks/gos-legacy.apk" "$GOS_FALLBACK_URL"; then
-        GOS_LEGACY="$WORK/apks/gos-legacy.apk"
-    else
-        warn "GOS unavailable from every source - building without it"
-    fi
+    warn "GOS unavailable from every source - building without it"
 fi
 
 log "Assembling module"

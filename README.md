@@ -64,10 +64,11 @@ Requires `bash`, `curl`, `python3`, `zip`. The script:
 2. Generates the permission allowlists (`scripts/gen_perms.py`) from the downloaded APKs.
 3. Assembles `module/` + the APKs and zips the result into `dist/`.
 
-> **GOS** is a system component and is **not on the Galaxy Store**, so it is fetched from
-> **APKMirror** (`scripts/apkmirror.sh`, overridable with `GOS_MODERN_URL` / `GOS_LEGACY_URL`).
-> Two builds are kept — 4.4.00.8 (arm64, API 33+) and 4.0.06 (noarch, API 29–32) — and
-> `customize.sh` picks the right one. A plain mirror is only used as a last-resort fallback.
+> **GOS** is a system component and is **not on the Galaxy Store**. APK mirrors sit behind
+> Cloudflare and return `403` to datacenter IPs (including GitHub Actions runners), so the two
+> GOS builds are **vendored as assets of the [`gos-vendor` release](../../releases/tag/gos-vendor)**
+> in this repo and fetched from there (`GOS_MODERN_URL` / `GOS_LEGACY_URL` / `GOS_VENDOR_BASE`
+> override the sources). `scripts/vendor_gos.sh` refreshes them.
 
 ### Permissions
 

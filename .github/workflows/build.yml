@@ -7,7 +7,7 @@ on:
         description: "Version string (default: build date)"
         required: false
   push:
-    tags: ["v*"]
+    tags: ["v[0-9]*"]
 
 permissions:
   contents: write
